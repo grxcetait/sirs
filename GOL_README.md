@@ -7,6 +7,7 @@ Python script for simulating Conway's Game of Life on a 2D square lattice with p
 - numpy
 - matplotlip
 - scipy
+- os
 
 ## game_of_life.py
 
