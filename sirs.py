@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import os
 from matplotlib.colors import ListedColormap
 import argparse
+import matplotlib.patches as mpatches
 
 class SIRS(object):
     """
@@ -274,6 +275,21 @@ class Simulation(object):
         # Define custom cmap 
         # Use 4 colors: Grey (Vaccinated), Red (Infected), Black (Susceptible), Green (Recovered)
         sirs_cmap = ListedColormap(["#95a5a6", "#e74c3c", "#2c3e50", "#27ae60"])
+        
+        
+        # Define custom cmap and colors
+        # Values: -2 (Vaccinated), -1 (Infected), 0 (Susceptible), 1 (Recovered)
+        colors = ["#95a5a6", "#e74c3c", "#2c3e50", "#27ae60"]
+        labels = ["Vaccinated", "Infected", "Susceptible", "Recovered"]
+        sirs_cmap = ListedColormap(colors)
+        
+        # Create legend handles manually
+        # Use mpatches.Patch to create colored squares for the legend
+        legend_handles = [mpatches.Patch(color=colors[i], label=labels[i]) 
+                          for i in range(len(colors))]
+        ax.legend(handles=legend_handles, loc='upper left', 
+              bbox_to_anchor=(1.02, 1), borderaxespad=0.)
+        plt.subplots_adjust(right=0.75)
         
         # Initialise the image object
         # vmin/vmax ensure -2 (vaccinated) is grey, -1 (infected) is red, 0 (susceptible) is black, 
