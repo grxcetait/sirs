@@ -2,8 +2,6 @@
 
 Python script for simulating the Susceptible-Infected-Recovered-Susceptible (SIRS) epidemic model on a 2D square lattice with periodic boundary conditions.
 
-## sirs.py
-
 This script has all the functions and classes to either run an animation or measurements of the simulation.
 The user needs to put in different arguments and customise the animation or measurement conditions.
 
@@ -13,12 +11,26 @@ The lattice is initialised randomly with states drawn from normalised transition
 - `0` Susceptible
 - `1` Recovered
 
-The model uses random sequential updating where the transition rules are:
-- Susceptible to infected with probability `p_S`.
-- Infected to recovered with probability `p_I`.
-- Recovered to susceptible with probability `p_R`.
+### Transition Rules
+The model follows a cyclic transition path: S → I → R → S.
+1. S → I: A susceptible cell becomes infected with probability $p_S$ if it has at least one infected neighbor.
+2. I → R: An infected cell recovers with probability $p_I$.
+3. R → S: A recovered cell becomes susceptible again with probability $p_R$.
 
-### Arguments
+## Dependencies
+
+- Python 3.8+
+- NumPy
+- Matplotlib
+- Numba
+
+Install dependencies with:
+
+```bash
+pip install numpy matplotlib numba
+```
+
+## Arguments
 
 - `n`, Lattice size (n x n), Default = 50
 - `steps`, Number of simulation steps, Default = 1000
@@ -27,16 +39,6 @@ The model uses random sequential updating where the transition rules are:
 - `p_R`, Probability of R → S (immunity loss), Default = 0.2
 - `mode`, Mode of `ani` (animation) or `mea` (measurements), Default = `ani`
 - `measure`, Measurement type: `average`, `variance`, or `immunity`, Default = `average`
-
-### Output
-
-All outputs are saved relative to the script's directory:
-
-```
-outputs/
-├── datafiles/     # Raw measurement data (.txt)
-└── plots/         # Saved figures (.png, 300 dpi)
-```
 
 ## Command line examples
 
@@ -72,4 +74,12 @@ python sirs.py --mode mea --measure variance
 python sirs.py --mode mea --measure immunity
 ```
 
+### Output
 
+All outputs are saved relative to the script's directory:
+
+```
+outputs/
+├── datafiles/     # Raw measurement data (.txt)
+└── plots/         # Saved figures (.png, 300 dpi)
+```
