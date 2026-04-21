@@ -12,6 +12,53 @@ import os
 from matplotlib.colors import ListedColormap
 import argparse
 import matplotlib.patches as mpatches
+from numba import njit
+
+@njit
+def sirs_step_numba(lattice, i, j, n, p_S, p_I, p_R):
+    """
+    Core transition logic for a single cell.
+    States: -2 (Immune), -1 (Infected), 0 (Susceptible), 1 (Recovered)
+    """
+    cell = lattice[i, j]
+    
+    if cell == -2: # Vaccinated/Immune
+        return -2
+        
+    if cell == 0: # Susceptible
+        # Count infected neighbors
+        # Periodic boundaries
+        in_up = lattice[(i - 1) % n, j] == -1
+        in_down = lattice[(i + 1) % n, j] == -1
+        in_left = lattice[i, (j - 1) % n] == -1
+        in_right = lattice[i, (j + 1) % n] == -1
+        
+        if in_up or in_down or in_left or in_right:
+            if np.random.random() < p_S:
+                return -1
+        return 0
+        
+    elif cell == -1: # Infected
+        if np.random.random() < p_I:
+            return 1
+        return -1
+        
+    else: # Recovered (state 1)
+        if np.random.random() < p_R:
+            return 0
+        return 1
+
+@njit
+def sirs_sweep_numba(lattice, n, N, p_S, p_I, p_R):
+    """
+    Performs one full Monte Carlo Sweep (N random updates).
+    Running this in Numba avoids the Python loop overhead.
+    """
+    for _ in range(N):
+        i = np.random.randint(0, n)
+        j = np.random.randint(0, n)
+        lattice[i, j] = sirs_step_numba(lattice, i, j, n, p_S, p_I, p_R)
+    return lattice
 
 class SIRS(object):
     """
@@ -68,7 +115,7 @@ class SIRS(object):
         # Create a two-dimensional square lattice according to probabilities
         # Where -1 is infected, 0 is susceptible, 1 is alive
         self.lattice = np.random.choice([-1, 0, 1], size = (self.n, self.n),
-                                        p = p_norm)
+                                        p = p_norm).astype(np.int32)
 
         
     def infected_or_susceptible_or_recovered(self, i, j):
@@ -147,26 +194,16 @@ class SIRS(object):
             
             # The cell will be susceptible with probability p_S
             return np.random.choice([1, 0], p = [1 - self.p_R, self.p_R])
-        
+            
     def update_lattice(self):
-        """
-        Perform one full Monte Carlo Sweep (N random updates) across the lattice.
-
-        Returns
-        -------
-        None.
-
-        """
-        
-        # Iterate N times through the lattice
-        for sweep in range(self.N):
-            
-            # Choose a random site (i, j) in the lattice of size (n x n)
-            i = np.random.randint(self.n)
-            j = np.random.randint(self.n)
-            
-            # Check for updates
-            self.lattice[i, j] = self.infected_or_susceptible_or_recovered(i, j)
+            """
+            Perform one full Monte Carlo Sweep using Numba.
+            """
+            # Ensure lattice is int32 and call optimized sweep
+            self.lattice = sirs_sweep_numba(
+                self.lattice.astype(np.int32), 
+                self.n, self.N, 
+                self.p_S, self.p_I, self.p_R)
     
     def count_infected(self):
         """
@@ -434,42 +471,39 @@ class Simulation(object):
         # Iterate through both arrays of probabilities
         for p_S in p_S_array:
             for p_R in p_R_array:
-                print(f"Simulating p_I = {p_I}, p_S = {p_S}, p_R = {p_R}...")
+                print(f"\rSimulating p_S={p_S}, p_R={p_R}...", end="", flush=True)
                 
                 # Initialise the lattice using the SIRS class
                 sirs = SIRS(self.n, p_S, p_I, p_R)
                 sirs.initialise()
-                
-                # Start counts at zero
-                counts = 0
+                sirs.lattice = sirs.lattice.astype(np.int32)
                 
                 # Make an empty list to hold at
                 infected_list = []
                 
-                # Iterate through 1000 sweeps after 100 sweeps of equilibrium
-                while counts < 1100:
-                    print(f"Count {counts} / 1100", end = '\r')
+                # Equilibrate for 100 sweeps
+                for _ in range(100):
+                    sirs_sweep_numba(sirs.lattice, sirs.n, sirs.N, p_S, p_I, p_R)
+                
+                # Measure for 1000 sweeps
+                for _ in range(1000):
+                    sirs_sweep_numba(sirs.lattice, sirs.n, sirs.N, p_S, p_I, p_R)
+                    inf_count = np.count_nonzero(sirs.lattice == -1)
+                    infected_list.append(inf_count)
                     
-                    # At each count, update the lattice
-                    sirs.update_lattice()
-                    
-                    # Add 1 to the counts
-                    counts += 1
-                    
-                    # Need to wait 100 sweeps for equilibrium
-                    if counts < 100:
-                        continue
-                    
-                    # Take a measurement every sweep
-                    # Count and append the total number of infected sites
-                    infected_list.append(sirs.count_infected())
+                    # Optimization: If the virus dies out, it stays dead
+                    if inf_count == 0:
+                        # Fill the rest of the list with 0 and break
+                        remaining = 1000 - len(infected_list)
+                        infected_list.extend([0] * remaining)
+                        break
                     
                 # After completing all the measurements for the probabilities
                 # Calcaulte the average and the variance of the fraction of infected sites
                 mean_infected = self.calculate_average_infected(infected_list)
                 
                 # Write the values into the specified file
-                with open(file_path, "a") as f:
+                with open(file_path, "w") as f:
                     f.write(f"{p_S},{p_R},{mean_infected}\n")
                     
     def variance_measurements(self, filename):
@@ -504,35 +538,31 @@ class Simulation(object):
         
         # Iterate through the array of probabilities
         for p_S in p_S_array:
-            print(f"Simulating p_I = {p_I}, p_S = {p_S}, p_R = {p_R}...\n", end = '\r')
+            print(f"\rSimulating p_S = {p_S} ...", end="", flush=True)
             
             # Initialise the lattice using the SIRS class
             sirs = SIRS(self.n, p_S, p_I, p_R)
             sirs.initialise()
+            sirs.lattice = sirs.lattice.astype(np.int32)
             
-            # Start counts at zero
-            counts = 0
-            
-            # Make an empty list to hold at
+            # Make an empty list to hold data
             infected_list = []
             
-            # Iterate through 10000 sweeps after 100 sweeps of equilibrium
-            while counts < 10100:
-                print(f"Count {counts} / 10100", end = '\r')
+            # Equilibrate for 100 sweeps
+            for _ in range(100):
+                sirs_sweep_numba(sirs.lattice, sirs.n, sirs.N, p_S, p_I, p_R)
+            
+            # Measurements for 10000 sweeps
+            for _ in range(10000):
+                sirs_sweep_numba(sirs.lattice, sirs.n, sirs.N, p_S, p_I, p_R)
+                inf_count = np.count_nonzero(sirs.lattice == -1)
+                infected_list.append(inf_count)
                 
-                # At each count, update the lattice
-                sirs.update_lattice()
-                
-                # Add 1 to the counts
-                counts += 1
-                
-                # Need to wait 100 sweeps for equilibrium
-                if counts < 100:
-                    continue
-                
-                # Take a measurement every sweep
-                # Count and append the total number of infected sites
-                infected_list.append(sirs.count_infected())
+                if inf_count == 0:
+                    # If infection dies, variance eventually becomes 0
+                    remaining = 10000 - len(infected_list)
+                    infected_list.extend([0] * remaining)
+                    break
                 
             # After completing all the measurements for the probabilities
             # Calcaulte the average and the variance of the fraction of infected sites
@@ -540,7 +570,7 @@ class Simulation(object):
             variance_infected_err = self.bootstrap_method(infected_list)
             
             # Write the values into the specified file
-            with open(file_path, "a") as f:
+            with open(file_path, "w") as f:
                 f.write(f"{p_S},{p_R},{variance_infected},{variance_infected_err}\n")
                 
     def immunity_measurements(self, filename):
@@ -579,54 +609,43 @@ class Simulation(object):
         
         # Iterate through fraction immunity array
         for frac in frac_immunity:
-            print(f"Simulating frac_immunity = {frac}...", end = '\r')
+            print(f"\rSimulating f_Im = {frac}...", end="", flush=True)
                
             # Initialise the lattice using the SIRS class
             sirs = SIRS(self.n, p_S, p_I, p_R)
             sirs.initialise()
+            sirs.lattice = sirs.lattice.astype(np.int32)
             
             # Vaccinate the lattice
             sirs.vaccinate(frac)
+            
             # Print how many sites are actually vaccinated
-            print(f"Number of vaccinated sites: {np.count_nonzero(sirs.lattice == -2)}")
+            #print(f"Number of vaccinated sites: {np.count_nonzero(sirs.lattice == -2)}")
             
-            # Start counts at zero
-            counts = 0
-            
-            # Make an empty list to hold at
+            # Make an empty list to hold data
             infected_list = []
             
-            # Iterate through 1000 sweeps after 100 sweeps of equilibrium
-            while counts < 1100:
-                print(f"Count {counts} / 1100", end = '\r')
+            # Equilibrate for 100 sweeps
+            for _ in range(100):
+                sirs_sweep_numba(sirs.lattice, sirs.n, sirs.N, p_S, p_I, p_R)
+            
+            # Measure for 1000 sweeps
+            for _ in range(1000):
+                sirs_sweep_numba(sirs.lattice, sirs.n, sirs.N, p_S, p_I, p_R)
+                inf_count = np.count_nonzero(sirs.lattice == -1)
+                infected_list.append(inf_count)
                 
-                # At each count, update the lattice
-                sirs.update_lattice()
-                
-                # Add 1 to the counts
-                counts += 1
-                
-                # Need to wait 100 sweeps for equilibrium
-                if counts < 100:
-                    continue
-                
-                # If there are no infected cells, break the loop
-                if sirs.count_infected() == 0:
-                    
-                    # Append zero to the list
-                    infected_list.append(sirs.count_infected())
+                if inf_count == 0:
+                    remaining = 1000 - len(infected_list)
+                    infected_list.extend([0] * remaining)
                     break
-                
-                # Take a measurement every sweep
-                # Count and append the total number of infected sites
-                infected_list.append(sirs.count_infected())
                 
             # After completing all the measurements for the probabilities
             # Calcaulte the average and the variance of the fraction of infected sites
             mean_infected = self.calculate_average_infected(infected_list)
             
             # Write the values into the specified file
-            with open(file_path, "a") as f:
+            with open(file_path, "w") as f:
                 f.write(f"{frac},{mean_infected}\n")
                  
     def plot_immunity(self, filename):
@@ -925,18 +944,18 @@ if __name__ == "__main__":
         
     if args.mode == "mea" and args.measure == "average":
         
-        filename = "sirs_average_measurements_3.txt"
+        filename = "sirs_average_measurements.txt"
         sim.average_measurements(filename)
         sim.plot_average_measurements(filename)
         
     if args.mode == "mea" and args.measure == "immunity":
         
-        filename = "sirs_immunity_measurements_3.txt"
+        filename = "sirs_immunity_measurements.txt"
         sim.immunity_measurements(filename)
         sim.plot_immunity(filename)
         
     if args.mode == "mea" and args.measure == "variance":
         
-        filename = "sirs_variance_measurements_4.txt"
+        filename = "sirs_variance_measurements.txt"
         sim.variance_measurements(filename)
         sim.plot_variance_measurements(filename)
