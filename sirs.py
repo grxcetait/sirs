@@ -17,47 +17,115 @@ from numba import njit
 @njit
 def sirs_step_numba(lattice, i, j, n, p_S, p_I, p_R):
     """
-    Core transition logic for a single cell.
+    Determine the next state of a specific cell (i, j) using Monte Carlo rules.
     States: -2 (Immune), -1 (Infected), 0 (Susceptible), 1 (Recovered)
+    
+    Parameters
+    ----------
+    lattice : numpy.ndarray
+        A 2D array of shape (n, n).
+    i : int
+        Lattice coordinate of the cell.
+    j : int
+        Lattice coordinate of the cell
+    n : int
+        Dimension of the square lattice (n x n)
+    p_S : float
+        Probability of infection from suscetible.
+    p_I : float
+        Probability of recovered from infected.
+    p_R : float
+        Probability of susceptible from recovered.
+
+    Returns
+    -------
+    int
+        The new state of the cell (-2, -1, 0, or 1).
     """
+    
+    # Obtain the site
     cell = lattice[i, j]
     
-    if cell == -2: # Vaccinated/Immune
+    # First, check if the cell is vaccinated
+    if cell == -2: 
+        
+        # The cell remains vaccinated 
         return -2
         
-    if cell == 0: # Susceptible
-        # Count infected neighbors
-        # Periodic boundaries
+    # Check if the cell is susceptible ...
+    if cell == 0:
+        
+        # Count infected neighbors using periodic boundaries
         in_up = lattice[(i - 1) % n, j] == -1
         in_down = lattice[(i + 1) % n, j] == -1
         in_left = lattice[i, (j - 1) % n] == -1
         in_right = lattice[i, (j + 1) % n] == -1
         
         if in_up or in_down or in_left or in_right:
+            
+            # The cell will be infected with probability p_S
             if np.random.random() < p_S:
                 return -1
+            
+        # Otherwise, the cell remains susceptible
         return 0
         
-    elif cell == -1: # Infected
+    # If the cell is infected ...
+    elif cell == -1:
+        
+        # The cell will be recovered with probability p_I
         if np.random.random() < p_I:
             return 1
+        
+        # Otherwise, the cell remains infected
         return -1
         
-    else: # Recovered (state 1)
+    # If the cell is recovered ...
+    else: 
+        
+        # The cell will be susceptible with probability p_S
         if np.random.random() < p_R:
             return 0
+        
+        # Otherwise, the cell remains recovered
         return 1
 
 @njit
 def sirs_sweep_numba(lattice, n, N, p_S, p_I, p_R):
     """
-    Performs one full Monte Carlo Sweep (N random updates).
-    Running this in Numba avoids the Python loop overhead.
+    Performs one full Monte Carlo Sweep (N random updates) across the lattice.
+
+    Parameters
+    ----------
+    lattice : numpy.ndarray
+        A 2D array of shape (n, n).
+    n : int
+        Dimension of the square lattice (n x n).
+    n : int
+        One sweep of the lattice (n x n).
+    p_S : float
+        Probability of infection from suscetible.
+    p_I : float
+        Probability of recovered from infected.
+    p_R : float
+        Probability of susceptible from recovered.
+
+    Returns
+    -------
+    numpy.ndarray
+        The updated lattice 
     """
+    
+    # Iterate N times through the lattice
     for _ in range(N):
+        
+        # Choose a random site (i, j) in the lattice of size (n x n)
         i = np.random.randint(0, n)
         j = np.random.randint(0, n)
+        
+        # Check for updates
         lattice[i, j] = sirs_step_numba(lattice, i, j, n, p_S, p_I, p_R)
+        
     return lattice
 
 class SIRS(object):
@@ -73,7 +141,7 @@ class SIRS(object):
         Parameters
         ----------
         n : int
-            Dimension of the square lattice (n x n)
+            Dimension of the square lattice (n x n).
         p_S : float
             Probability of a Susceptible cell becoming Infected (S -> I).
         p_I : float
@@ -116,94 +184,15 @@ class SIRS(object):
         # Where -1 is infected, 0 is susceptible, 1 is alive
         self.lattice = np.random.choice([-1, 0, 1], size = (self.n, self.n),
                                         p = p_norm).astype(np.int32)
-
-        
-    def infected_or_susceptible_or_recovered(self, i, j):
-        """
-        Determine the next state of a specific cell (i, j) using Monte Carlo rules.
-
-        Parameters
-        ----------
-        i : int
-            Lattice coordinate of the cell.
-        j : int
-            Lattice coordinate of the cell
-
-        Returns
-        -------
-        int
-            The new state of the cell (-2, -1, 0, or 1)
-
-        """
-        
-        # Obtain the site 
-        cell = self.lattice[i, j]
-        
-        # Collect all of the nearest neighbours
-        nearest_neighbours = [self.lattice[(i - 1) % self.n, j],
-                              self.lattice[(i + 1) % self.n, j],
-                              self.lattice[i, (j - 1) % self.n],
-                              self.lattice[i, (j + 1) % self.n]
-                              ]
-    
-        # Start with all counts at zero
-        infected = 0
-        susceptible = 0
-        recovered = 0
-        
-        # Count all neighbours to see if they are infected, susceptible or alive
-        for nn in nearest_neighbours:
-            
-            if nn == -1:
-                infected += 1
-                
-            elif nn == 0:
-                susceptible += 1
-                
-            else:
-                recovered += 1
-                
-        # First, check is the cell is vaccinated
-        if cell == -2:
-            
-            # The cell remains vaccinated
-            return -2
-        
-        # If the cell is susceptible ...
-        elif cell == 0:
-            
-            # If there is at least 1 infected nearest neighbour ...
-            if infected >= 1: 
-                
-                # The cell will be infected with probability p_S
-                return np.random.choice([0, -1], p = [1 - self.p_S, self.p_S])
-            
-            else:
-                
-                # Otherwise, the cell remains susceptible
-                return 0
-            
-        # If the cell is infected ...
-        elif cell == -1:
-            
-            # The cell will be recovered with probability p_I
-            return np.random.choice([-1, 1], p = [1 - self.p_I, self.p_I])
-            
-        # If the cell is recovered ...
-        else:
-            
-            # The cell will be susceptible with probability p_S
-            return np.random.choice([1, 0], p = [1 - self.p_R, self.p_R])
             
     def update_lattice(self):
             """
             Perform one full Monte Carlo Sweep using Numba.
             """
-            # Ensure lattice is int32 and call optimized sweep
-            self.lattice = sirs_sweep_numba(
-                self.lattice.astype(np.int32), 
-                self.n, self.N, 
-                self.p_S, self.p_I, self.p_R)
+            
+            # Call Numba function
+            self.lattice = sirs_sweep_numba(self.lattice, self.n, self.N,
+                                            self.p_S, self.p_I, self.p_R)
     
     def count_infected(self):
         """
@@ -265,7 +254,7 @@ class Simulation(object):
         n : int
             Lattice dimension.
         steps : int
-            Number of steps for animation or measurement.
+            Number of measurement steps or animation frames.
         p_S : float
             Probability of infection from suscetible.
         p_I : float
@@ -282,7 +271,7 @@ class Simulation(object):
         # Defining parameters for the lattice
         self.n = n # Size of the two-dimensional square lattice
         self.N = n * n # Total number of sites in the square lattice
-        self.steps = steps # Choice of number of steps for the animation
+        self.steps = steps # Measurement steps or animation frames 
         self.p_S = p_S # Probability of susceptible to infected
         self.p_I = p_I # Probability of infected to recovered
         self.p_R = p_R # Probability of recovered to susceptible
@@ -468,6 +457,9 @@ class Simulation(object):
         p_S_array = np.round(np.arange(0, 1.05, 0.05), 2)
         p_R_array = np.round(np.arange(0, 1.05, 0.05), 2)
         
+        # Create empty list to store results
+        results = []
+        
         # Iterate through both arrays of probabilities
         for p_S in p_S_array:
             for p_R in p_R_array:
@@ -476,7 +468,7 @@ class Simulation(object):
                 # Initialise the lattice using the SIRS class
                 sirs = SIRS(self.n, p_S, p_I, p_R)
                 sirs.initialise()
-                sirs.lattice = sirs.lattice.astype(np.int32)
+                sirs.lattice = sirs.lattice
                 
                 # Make an empty list to hold at
                 infected_list = []
@@ -502,9 +494,12 @@ class Simulation(object):
                 # Calcaulte the average and the variance of the fraction of infected sites
                 mean_infected = self.calculate_average_infected(infected_list)
                 
-                # Write the values into the specified file
-                with open(file_path, "w") as f:
-                    f.write(f"{p_S},{p_R},{mean_infected}\n")
+                # Append a formatted string to results list
+                results.append(f"{p_S},{p_R},{mean_infected}\n")
+                
+        # Write the values into the specified file
+        with open(file_path, "w") as f:
+            f.writelines(results)
                     
     def variance_measurements(self, filename):
         """
@@ -536,6 +531,9 @@ class Simulation(object):
         p_R = 0.5
         p_S_array = np.round(np.arange(0.2, 0.51, 0.01), 2)
         
+        # Create empty list to hold results
+        results = []
+        
         # Iterate through the array of probabilities
         for p_S in p_S_array:
             print(f"\rSimulating p_S = {p_S} ...", end="", flush=True)
@@ -543,7 +541,7 @@ class Simulation(object):
             # Initialise the lattice using the SIRS class
             sirs = SIRS(self.n, p_S, p_I, p_R)
             sirs.initialise()
-            sirs.lattice = sirs.lattice.astype(np.int32)
+            sirs.lattice = sirs.lattice
             
             # Make an empty list to hold data
             infected_list = []
@@ -569,9 +567,12 @@ class Simulation(object):
             variance_infected = self.calculate_variance_infected(infected_list)
             variance_infected_err = self.bootstrap_method(infected_list)
             
-            # Write the values into the specified file
-            with open(file_path, "w") as f:
-                f.write(f"{p_S},{p_R},{variance_infected},{variance_infected_err}\n")
+            # Append results to list
+            results.append(f"{p_S},{p_R},{variance_infected},{variance_infected_err}\n")
+            
+        # Write the values into the specified file
+        with open(file_path, "w") as f:
+            f.writelines(results)
                 
     def immunity_measurements(self, filename):
         """
@@ -607,6 +608,9 @@ class Simulation(object):
         # Define array of fraction of vaccinated sites
         frac_immunity = np.round(np.linspace(0, 1, 101), 2) # 100 points
         
+        # Create empty list to hold results 
+        results = []
+        
         # Iterate through fraction immunity array
         for frac in frac_immunity:
             print(f"\rSimulating f_Im = {frac}...", end="", flush=True)
@@ -614,7 +618,7 @@ class Simulation(object):
             # Initialise the lattice using the SIRS class
             sirs = SIRS(self.n, p_S, p_I, p_R)
             sirs.initialise()
-            sirs.lattice = sirs.lattice.astype(np.int32)
+            sirs.lattice = sirs.lattice
             
             # Vaccinate the lattice
             sirs.vaccinate(frac)
@@ -644,9 +648,12 @@ class Simulation(object):
             # Calcaulte the average and the variance of the fraction of infected sites
             mean_infected = self.calculate_average_infected(infected_list)
             
-            # Write the values into the specified file
-            with open(file_path, "w") as f:
-                f.write(f"{frac},{mean_infected}\n")
+            # Write results to results list
+            results.append(f"{frac},{mean_infected}\n")
+            
+        # Write the values into the specified file
+        with open(file_path, "w") as f:
+            f.writelines(results)
                  
     def plot_immunity(self, filename):
         """
@@ -696,7 +703,7 @@ class Simulation(object):
         # Iterate through input data and append to empty lists
         for i in range(0, len(input_data), 2):
             
-            # Obtain vlaue from input data
+            # Obtain value from input data
             frac_immunity = float(input_data[i])
             mean_infected = float(input_data[i+1])
 
@@ -714,7 +721,7 @@ class Simulation(object):
         ax.set_ylabel(r"Average Infected Fraction $\langle I \rangle / N$", fontsize=14)
         ax.set_title(r"SIRS Model: Effect of Vaccination ($p_S=p_I=p_R=0.5$)", fontsize=16)
         
-        # Add a horizontal line at 0 to clearly show when the infection is gone
+        # Add a horizontal line at 0 to show when the infection is gone
         ax.axhline(0, color='black', lw=0.8, linestyle='--')
         
         ax.grid(True, linestyle=':', alpha=0.6)
@@ -807,8 +814,8 @@ class Simulation(object):
         
         # Labels and formatting
         ax.set_title(r"Phase Diagram ($\langle I \rangle / N$)", fontsize=16)
-        ax.set_xlabel(r"$p_{R \rightarrow S}$", fontsize=14) # Now on X-axis
-        ax.set_ylabel(r"$p_{S \rightarrow I}$", fontsize=14) # Now on Y-axis
+        ax.set_xlabel(r"$p_{R \rightarrow S}$", fontsize=14)
+        ax.set_ylabel(r"$p_{S \rightarrow I}$", fontsize=14)
         ax.tick_params(axis = 'both', which = 'major', labelsize = 12)
         
         # Add a colorbar to quantify the average fraction of infected sites
@@ -891,7 +898,7 @@ class Simulation(object):
         # Plot variance with error bars using the bootstrap results
         ax.errorbar(p_S_array, variance_infected_array, yerr=variance_infected_err_array, 
                     fmt='o-', color='red', ecolor='black', markerfacecolor = 'black', markeredgecolor = 'black',
-                    capsize=3, elinewidth=1, markeredgewidth=1, markersize = 4)
+                    capsize=3, elinewidth=1, markeredgewidth=1, markersize = 4, label = 'Infected Variance')
         
         # Labels and formatting to show the phase transition
         ax.set_xlabel(r"Infection Probability $p_{S \rightarrow I}$", fontsize=14)
@@ -919,7 +926,7 @@ if __name__ == "__main__":
 
     # User input parameters
     parser.add_argument("--n", type=int, default=50, help="Lattice size (n x n)")
-    parser.add_argument("--steps", type=int, default=1000, help="Number of simulation steps")
+    parser.add_argument("--steps", type=int, default=1000, help="Number of measurement steps or animation frames.")
     parser.add_argument("--p_S", type=float, default=0.3, help="S -> I infection probability")
     parser.add_argument("--p_R", type=float, default=0.2, help="I -> R recovery probability")
     parser.add_argument("--p_I", type=float, default=0.5, help="R -> S immunity loss probability")
